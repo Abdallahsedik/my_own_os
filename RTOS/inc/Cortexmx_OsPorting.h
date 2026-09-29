@@ -8,8 +8,9 @@
 #ifndef INC_CORTEXMX_OSPORTING_H_
 #define INC_CORTEXMX_OSPORTING_H_
 #include "stm32f103x6.h"
-#include <stdint.h>
-#include "Platform_types.h"
+#include <string.h>
+#include "Std_Types.h"
+#include "Systick.h"
 
 
 extern int _estack ;
@@ -37,6 +38,11 @@ extern int  _end  ;/*_end == _eheap*/
 										"orr r3 ,r3,#0x01 \n\t "\
 										"msr control ,r3 ");
 
+
+
+void trigger_OS_PendSV(void);
+void HW_Init();
+void Start_Ticker();
 
 
 #endif /* INC_CORTEXMX_OSPORTING_H_ */

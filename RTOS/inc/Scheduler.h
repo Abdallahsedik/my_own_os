@@ -10,12 +10,14 @@
 #include "Cortexmx_OsPorting.h"
 
 
-
 typedef enum{
-	NoError                         = 0,
-	Ready_Queue_init_error          = 1,
-	Task_exceeded_StackSize         = 2,
-	MutexisReacedToMaxNumberOfUsers = 4
+	NoError                          = 0,
+	Ready_Queue_init_error           = 1,
+	Task_exceeded_StackSize          = 2,
+	MutexisReacedToMaxNumberOfUsers  = 4,
+	Task_Null_Pointer                = 8,
+	Task_Invalid_State               = 16,
+	Task_Not_Current                 = 32
 }MYRTOS_errorID;
 
 
@@ -48,6 +50,9 @@ typedef struct{
 
 MYRTOS_errorID MYRTOS_Init();
 MYRTOS_errorID MYRTOS_Create_task(Task_ref * TRef);
+MYRTOS_errorID Activate_task(Task_ref * TRef);
+MYRTOS_errorID Terminate_task(void);
+MYRTOS_errorID Start_OS(void);
 
 
 #endif /* INC_SCHEDULER_H_ */

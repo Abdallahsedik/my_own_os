@@ -22,7 +22,7 @@ void UsageFault_Handler(void){
 	while(1);
 }
 
-__attribute__((naked)) void SVC_Handler(void)
+__attribute__ ((naked)) void SVC_Handler(void)
 {
 	__asm("tst lr ,#4 \n\t"
 			"ITE EQ   \n\t"
@@ -31,3 +31,19 @@ __attribute__((naked)) void SVC_Handler(void)
 			"B OS_SVC");
 
 }
+void HW_Init()
+{
+	__NVIC_SetPriority(PendSV_IRQn,15);
+}
+
+void trigger_OS_PendSV(void)
+{
+	SCB->ICSR |=SCB_ICSR_PENDSVSET_Msk;
+
+}
+void Start_Ticker( )
+{
+
+	Systic_Config(8000);
+}
+
