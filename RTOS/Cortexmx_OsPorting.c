@@ -7,7 +7,7 @@
 
 
 #include "Cortexmx_OsPorting.h"
-
+uint8 Systick_LED=0;
 void HardFault_Handler(void){
 	while(1);
 
@@ -22,9 +22,20 @@ void UsageFault_Handler(void){
 	while(1);
 }
 
+void SysTick_Handler(void)
+{
+	Systick_LED^=1;
+	//decide what next
+	//triger os pendsv
+	Decide_whatNext();
+	/*switch context and restore */
+	trigger_OS_PendSV();
+
+
+}
 __attribute__ ((naked)) void SVC_Handler(void)
 {
-	__asm("tst lr ,#4 \n\t"
+	__asm volatile ("tst lr ,#4 \n\t"
 			"ITE EQ   \n\t"
 			"mrseq r0 ,msp \n\t"
 			"mrsne r0 ,psp \n\t"
@@ -44,6 +55,6 @@ void trigger_OS_PendSV(void)
 void Start_Ticker( )
 {
 
-	Systic_Config(8000);
+	Systick_Config(8000);
 }
 

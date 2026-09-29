@@ -26,53 +26,49 @@ Buffer_status FIFO_init (FIFO_Buf_t* fifo,element_type* buff , unsigned int leng
 }
 
 /* *********************************** */
-
-Buffer_status FIFO_enqueue (FIFO_Buf_t* fifo,element_type item){
-
-	/* fifo null*/
+Buffer_status FIFO_enqueue(FIFO_Buf_t* fifo, element_type item)
+{
+	if (fifo == NULL_PTR)
+		return FIFO_NULL;
 
 	if (!fifo->base || !fifo->length)
 		return FIFO_NULL;
-	/*fifo is full*/
 
-	/* fifo full */
+	if (item == NULL_PTR)
+		return FIFO_NULL;
+
 	if ((fifo->head == fifo->tail) && (fifo->counter == fifo->length))
 		return FIFO_FULL;
 
-	*(fifo->tail)=item;
+	*(fifo->tail) = item;
 	fifo->counter++;
 
-	/*for circular fifo again */
-
-	/* circular enqueue */
 	if (fifo->tail == (fifo->base + fifo->length - 1))
 		fifo->tail = fifo->base;
 	else
 		fifo->tail++;
 
 	return FIFO_NO_ERROR;
-
-
 }
 
-/* *********************************** */
+Buffer_status FIFO_dequeue(FIFO_Buf_t* fifo, element_type* item)
+{
+	if (fifo == NULL_PTR)
+		return FIFO_NULL;
 
-Buffer_status FIFO_dequeue (FIFO_Buf_t* fifo, element_type* item){
-	/* check fifo valid */
 	if (!fifo->base || !fifo->length)
 		return FIFO_NULL;
 
-	/* fifo empty */
+	if (item == NULL_PTR)
+		return FIFO_NULL;
+
 	if (fifo->head == fifo->tail)
 		return FIFO_EMPTY;
-
-
 
 	*item = *(fifo->head);
 	fifo->counter--;
 
-	/* circular dequeue */
-	if (fifo->head == ((fifo->base + (fifo->length )) - 1 ))
+	if (fifo->head == (fifo->base + fifo->length - 1))
 		fifo->head = fifo->base;
 	else
 		fifo->head++;
@@ -81,15 +77,17 @@ Buffer_status FIFO_dequeue (FIFO_Buf_t* fifo, element_type* item){
 }
 
 
-
-
 /* *********************************** */
 
-Buffer_status FIFO_is_full (FIFO_Buf_t* fifo){
-
-	if(!fifo->head || !fifo->base || !fifo->tail)
+Buffer_status FIFO_is_full(FIFO_Buf_t* fifo)
+{
+	if (fifo == NULL_PTR)
 		return FIFO_NULL;
-	if(fifo->counter == fifo->length)
+
+	if (!fifo->head || !fifo->base || !fifo->tail)
+		return FIFO_NULL;
+
+	if (fifo->counter == fifo->length)
 		return FIFO_FULL;
 
 	return FIFO_NO_ERROR;

@@ -54,5 +54,7 @@ MYRTOS_errorID Activate_task(Task_ref * TRef);
 MYRTOS_errorID Terminate_task(void);
 MYRTOS_errorID Start_OS(void);
 
+void Decide_whatNext(void);
+
 
 #endif /* INC_SCHEDULER_H_ */

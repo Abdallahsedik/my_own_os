@@ -35,12 +35,13 @@ Task_ref * READY_QUEUE_FIFO[100];
 
 Task_ref IDLE_Task_Instance;
 Task_ref* IDLE_Task = &IDLE_Task_Instance;
-
+uint8 Idle_task_LED=0;
 void MyRtos_IDLE_Task(void)
 {
 	while(1)
 	{
 		__asm("nop");
+		Idle_task_LED^=1;
 
 	}
 }
@@ -122,6 +123,9 @@ MYRTOS_errorID MYRTOS_Create_task(Task_ref * TRef)
 	/*Init psp task stack */
 	MyRTOS_Create_TaskStack(TRef);
 
+	/*update sch table and no of active tasks */
+	//	OS_Control.OSTasks[OS_Control.NoOfActiveTasks]=TRef;
+	//	OS_Control.NoOfActiveTasks++;
 	/*task state update -> suspended */
 	TRef->TaskState=Suspend;
 
@@ -145,7 +149,7 @@ MYRTOS_errorID MYRTOS_Init()
 	}
 	//cofig idle task
 
-
+	strcpy(IDLE_Task->TaskName, "IdleTask");
 	IDLE_Task->priority=255;
 	IDLE_Task->p_TaskEntry=MyRtos_IDLE_Task;
 	IDLE_Task->Stack_Size=300;
@@ -251,10 +255,15 @@ void MYRTOS_Update_Sch_teble(void)
 	while(iterator< OS_Control.NoOfActiveTasks)
 	{
 		Ptask = OS_Control.OSTasks[iterator];
+		if (Ptask == IDLE_Task)
+		{
+			iterator++;
+			continue;
+		}
 		if(Ptask->TaskState != Suspend)
 		{
 			/*in case we reached to the end of avaliable OS_TASKS*/
-			if (iterator == OS_Control.NoOfActiveTasks - 1)
+			if (iterator == OS_Control.NoOfActiveTasks - 2)
 			{
 				FIFO_enqueue(&READY_QUEUE, Ptask);
 				Ptask->TaskState = ready;
@@ -306,26 +315,43 @@ void MYRTOS_Update_Sch_teble(void)
 	}
 }
 
+
 void Decide_whatNext(void)
 {
-	//if Ready Queue is empty && OS_Control->currentTask != suspend
-	if (READY_QUEUE.counter == 0 && OS_Control.CurrentTask->TaskState != Suspend) //FIFO_EMPTY
+	__disable_irq();
+
+	if (OS_Control.CurrentTask == NULL_PTR)
 	{
-		OS_Control.CurrentTask->TaskState = Running ;
-		//add the current task again(round robin)
+		__enable_irq();
+		return;
+	}
+	/*if Ready Queue is empty && OS_Control->currentTask != suspend*/
+
+	if (READY_QUEUE.counter == 0 && OS_Control.CurrentTask->TaskState != Suspend)
+	{
+		OS_Control.CurrentTask->TaskState = Running;
+		/*add the current task again(round robin)*/
 		FIFO_enqueue(&READY_QUEUE, OS_Control.CurrentTask);
-		OS_Control.NextTask = OS_Control.CurrentTask ;
-	}else
+		OS_Control.NextTask = OS_Control.CurrentTask;
+	}
+	else
 	{
-		FIFO_dequeue(&READY_QUEUE, &OS_Control.NextTask);
-		OS_Control.NextTask->TaskState = Running ;
-		//update Ready queue (to keep round robin Algo. happen)
-		if ((OS_Control.CurrentTask->priority == OS_Control.NextTask->priority )&&(OS_Control.CurrentTask->TaskState != Suspend))
+		/*check next task */
+		if (FIFO_dequeue(&READY_QUEUE, &OS_Control.NextTask) == FIFO_NO_ERROR)
 		{
-			FIFO_enqueue(&READY_QUEUE, OS_Control.CurrentTask);
-			OS_Control.CurrentTask->TaskState = ready ;
+			OS_Control.NextTask->TaskState = Running;
+			/*update Ready queue (to keep round robin Algo. happen)*/
+			if ((OS_Control.CurrentTask->priority == OS_Control.NextTask->priority) &&
+					(OS_Control.CurrentTask->TaskState == ready))
+			{
+				FIFO_enqueue(&READY_QUEUE, OS_Control.CurrentTask);
+				OS_Control.CurrentTask->TaskState = ready;
+			}
 		}
-	}}
+	}
+
+	__enable_irq();
+}
 
 /*to execute specific os service
  * handler mode */
@@ -440,9 +466,11 @@ MYRTOS_errorID Start_OS(void)
 	/*set default task (current task =idle task*/
 	OS_Control.CurrentTask = IDLE_Task;
 	OS_Control.CurrentTask->TaskState = Running;
-		/*start ticker 1 ms*/
-	Start_Ticker();
-	OS_SET_PSP(OS_Control.CurrentTask);
+	/*start ticker 1 ms*/
+	HW_Init();/*privilage*/
+	Start_Ticker();/*privilage*/
+
+	OS_SET_PSP(OS_Control.CurrentTask->Current_PSP);
 	/*switch thread mode sp from msp to psp  */
 	OS_SWITCH_SP_TO_PSP;
 
