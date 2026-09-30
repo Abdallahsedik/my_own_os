@@ -7,7 +7,7 @@
 
 
 #include "Cortexmx_OsPorting.h"
-uint8 Systick_LED=0;
+uint8 Systick_LED=1;
 void HardFault_Handler(void){
 	while(1);
 
@@ -25,6 +25,8 @@ void UsageFault_Handler(void){
 void SysTick_Handler(void)
 {
 	Systick_LED^=1;
+
+	MYRTOS_Update_TasksWaitingTime();
 	//decide what next
 	//triger os pendsv
 	Decide_whatNext();
