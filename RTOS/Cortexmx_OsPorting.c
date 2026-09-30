@@ -7,6 +7,9 @@
 
 
 #include "Cortexmx_OsPorting.h"
+#include "Scheduler.h"
+extern struct OS_Control;
+
 uint8 Systick_LED=1;
 void HardFault_Handler(void){
 	while(1);
@@ -26,6 +29,10 @@ void SysTick_Handler(void)
 {
 	Systick_LED^=1;
 
+	if ((uint32)OS_Control.CurrentTask->Current_PSP < OS_Control.CurrentTask->_E_PSP_Task)
+	{
+		MyRTOS_StackOverflowHook(OS_Control.CurrentTask);
+	}
 	MYRTOS_Update_TasksWaitingTime();
 	//decide what next
 	//triger os pendsv

@@ -9,19 +9,8 @@
 #include "Scheduler.h"
 #include "MyRtos_FIFO.h"
 
-struct {
-	Task_ref* OSTasks[100]; //Sch. Table
-	uint32 _S_MSP_Task ;
-	uint32 _E_MSP_Task ;
-	uint32 PSP_Task_Locator ;
-	uint32 NoOfActiveTasks ;
-	Task_ref* CurrentTask ;
-	Task_ref* NextTask ;
-	enum{
-		OSsuspend,
-		OsRunning
-	}OSmodeID;
-}OS_Control;
+
+OS_Control_t OS_Control;
 
 typedef enum {
 	SVC_Activatetask,
@@ -32,7 +21,7 @@ typedef enum {
 }SVC_ID;
 
 FIFO_Buf_t READY_QUEUE ;
-Task_ref * READY_QUEUE_FIFO[100];
+Task_ref * READY_QUEUE_FIFO[MAX_TASKS];
 
 Task_ref IDLE_Task_Instance;
 Task_ref* IDLE_Task = &IDLE_Task_Instance;
@@ -69,7 +58,7 @@ MYRTOS_errorID MYRTOS_Create_MainStack()
 
 }
 
-void MyRTOS_Create_TaskStack(Task_ref* Tref)
+MYRTOS_errorID MyRTOS_Create_TaskStack(Task_ref* Tref)
 {
 	/*Task Frame
 	 * ======
@@ -85,26 +74,70 @@ void MyRTOS_Create_TaskStack(Task_ref* Tref)
 	 *====
 	 *r5, r6 , r7 ,r8 ,r9, r10,r11 (Saved/Restore)Manual
 	 */
+
+	if(Tref == NULL_PTR)
+	{
+		return Task_Null_Pointer;
+	}
+	/*check if excedded of max number os tasks*/
+	if (OS_Control.NoOfActiveTasks >= MAX_TASKS)
+	{
+			return Task_Limit_Exceeded;
+	}
 	Tref->Current_PSP =(uint32 *) Tref->_S_PSP_Task ;
 
 	Tref->Current_PSP-- ;
-	*(Tref->Current_PSP) = 0x01000000;         //DUMMY_XPSR should T =1 to avoid BUS fault;//0x01000000
+	if(Tref->Current_PSP < (uint32*)Tref->_E_PSP_Task )
+	{
+		return Task_exceeded_StackSize;
+	}
+	else
+	{
+		*(Tref->Current_PSP) = 0x01000000;         //DUMMY_XPSR should T =1 to avoid BUS fault;//0x01000000
+		Tref->Current_PSP-- ;
+		if(Tref->Current_PSP < (uint32*)Tref->_E_PSP_Task)
+		{
+			return Task_exceeded_StackSize;
 
-	Tref->Current_PSP-- ;
-	*(Tref->Current_PSP) = (unsigned int)Tref->p_TaskEntry ; //PC
+		}
+		else
+		{
+			*(Tref->Current_PSP) = (unsigned int)Tref->p_TaskEntry ; //PC
+			Tref->Current_PSP-- ; //LR = 0xFFFFFFFD (EXC_RETURN)Return to thread with PSP
+			if(Tref->Current_PSP <  (uint32*)Tref->_E_PSP_Task)
+			{
+				return Task_exceeded_StackSize;
 
-	Tref->Current_PSP-- ; //LR = 0xFFFFFFFD (EXC_RETURN)Return to thread with PSP
-	*(Tref->Current_PSP)  = 0xFFFFFFFD ;
+			}
+			else
+			{
+				*(Tref->Current_PSP)  = 0xFFFFFFFD ;
+
+			}
+
+		}
+
+	}
+
+
+
 
 	for (int  j=0 ; j< 13 ; j++ )
 	{
 		Tref->Current_PSP-- ;
+		if(Tref->Current_PSP < (uint32*)Tref->_E_PSP_Task)
+		{
+			return Task_exceeded_StackSize;
+		}
 		*(Tref->Current_PSP)  = 0 ;
 
 	}
 
 	OS_Control.OSTasks[OS_Control.NoOfActiveTasks] = Tref;
 	OS_Control.NoOfActiveTasks++;
+
+
+	return NoError;
 }
 
 MYRTOS_errorID MYRTOS_Create_task(Task_ref * TRef)
@@ -122,7 +155,7 @@ MYRTOS_errorID MYRTOS_Create_task(Task_ref * TRef)
 	/*alligned 8 bytes*/
 	OS_Control.PSP_Task_Locator = (TRef->_E_PSP_Task - 8);
 	/*Init psp task stack */
-	MyRTOS_Create_TaskStack(TRef);
+	Error_Status= MyRTOS_Create_TaskStack(TRef);
 
 	/*update sch table and no of active tasks */
 	//	OS_Control.OSTasks[OS_Control.NoOfActiveTasks]=TRef;
@@ -130,8 +163,21 @@ MYRTOS_errorID MYRTOS_Create_task(Task_ref * TRef)
 	/*task state update -> suspended */
 	TRef->TaskState=Suspend;
 
+
 	return Error_Status;
 
+}
+/*this function used when stack  overflow */
+/*in nextversion  i will add terminate the task */
+void MyRTOS_StackOverflowHook(Task_ref* FaultyTask)
+{
+    __disable_irq();
+
+    /*save the fucdtion in variable */
+    static Task_ref* LastOverflowedTask;
+    LastOverflowedTask = FaultyTask;
+
+    while(1);/*stuck in this point */
 }
 
 MYRTOS_errorID MYRTOS_Init()
@@ -143,7 +189,7 @@ MYRTOS_errorID MYRTOS_Init()
 	//specify the main stack for os
 	Error_Status=MYRTOS_Create_MainStack();
 	//create os ready queue
-	if(FIFO_init(&READY_QUEUE, READY_QUEUE_FIFO, 100)!= FIFO_NO_ERROR)
+	if(FIFO_init(&READY_QUEUE, READY_QUEUE_FIFO, MAX_TASKS)!= FIFO_NO_ERROR)
 	{
 		Error_Status+=Ready_Queue_init_error;
 
@@ -198,7 +244,7 @@ MYRTOS_errorID Activate_task(Task_ref * TRef)
 		return Task_Invalid_State;
 	}
 
-	TRef->TaskState = Waiting;
+	TRef->TaskState = ready;
 
 	/*update sch. table
 	 * svc interrupt/ handler (update ready queue)
@@ -227,6 +273,16 @@ void MYRTOS_TaskWait(unsigned int NoTICKS,Task_ref* SelfTref)
 	//to be suspended immediately
 	MYRTOS_OS_SVC_Set(SVC_terminateTask);
 
+}
+MYRTOS_errorID MyRTOS_GetTaskState(Task_ref* TRef, uint8* State)
+{
+	if (TRef == NULL_PTR || State == NULL_PTR)
+	{
+		return Task_Null_Pointer;
+	}
+
+	*State = TRef->TaskState;
+	return NoError;
 }
 
 
@@ -535,4 +591,30 @@ MYRTOS_errorID ReleaseResource(Resource_t* Res)
 	return NoError;
 }
 
+
+MYRTOS_errorID Activate_task_FromISR(Task_ref* TRef)
+{
+	if (TRef == NULL_PTR)
+	{
+		return Task_Null_Pointer;
+	}
+
+	if (TRef->TaskState != Suspend)
+	{
+		return Task_Invalid_State;
+	}
+
+	TRef->TaskState = ready;
+
+	/*we are in Handler mode/privileged  */
+	MYRTOS_Update_Sch_teble();
+
+	if (OS_Control.OSmodeID == OsRunning)
+	{
+		Decide_whatNext();
+		trigger_OS_PendSV();   /*now we will trigger pendsv */
+	}
+
+	return NoError;
+}
 
