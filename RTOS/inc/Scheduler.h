@@ -21,7 +21,7 @@ typedef enum{
 }MYRTOS_errorID;
 
 
-typedef struct{
+typedef struct Task_ref{
 	uint32 Stack_Size;
 	uint8 priority;
 	void (*p_TaskEntry)(void); //pointer to Tack C Function
@@ -46,7 +46,15 @@ typedef struct{
 	}TimingWaiting;
 }Task_ref;
 
-#define element_type Task_ref*
+typedef struct{
+	uint8 CeilingPriority;     /*you need to define/calculate  Ceiling Priority before run os  */
+	Task_ref* Owner;
+	uint8 PreviousPriority;   /*owner's original periority without celing */
+}Resource_t;
+
+
+
+
 
 MYRTOS_errorID MYRTOS_Init();
 MYRTOS_errorID MYRTOS_Create_task(Task_ref * TRef);
@@ -54,8 +62,11 @@ MYRTOS_errorID Activate_task(Task_ref * TRef);
 MYRTOS_errorID Terminate_task(void);
 MYRTOS_errorID Start_OS(void);
 void MYRTOS_Update_TasksWaitingTime(void);
-
+void MYRTOS_TaskWait(unsigned int NoTICKS,Task_ref* SelfTref);
 void Decide_whatNext(void);
+
+MYRTOS_errorID GetResource(Resource_t* Res);
+MYRTOS_errorID ReleaseResource(Resource_t* Res);
 
 
 #endif /* INC_SCHEDULER_H_ */

@@ -8,6 +8,7 @@
 
 #include "Scheduler.h"
 #include "MyRtos_FIFO.h"
+
 struct {
 	Task_ref* OSTasks[100]; //Sch. Table
 	uint32 _S_MSP_Task ;
@@ -263,42 +264,44 @@ void MYRTOS_Update_Sch_teble(void)
 	while(FIFO_dequeue(&READY_QUEUE ,&temp)!=FIFO_EMPTY);
 
 
-	while(iterator< OS_Control.NoOfActiveTasks)
+	while(iterator < OS_Control.NoOfActiveTasks)
 	{
-		Ptask = OS_Control.OSTasks[iterator] ;
-		PnextTask = OS_Control.OSTasks[iterator+1] ;
+		Ptask = OS_Control.OSTasks[iterator];
+
 		if (Ptask->TaskState != Suspend)
 		{
-			//in case we reached to the end of avaliable OSTASKS
+			if (iterator == OS_Control.NoOfActiveTasks - 1)
+			{
+				FIFO_enqueue(&READY_QUEUE, Ptask);
+				Ptask->TaskState = ready;
+				break;
+			}
+
+			PnextTask = OS_Control.OSTasks[iterator + 1];
+
 			if (PnextTask->TaskState == Suspend)
 			{
 				FIFO_enqueue(&READY_QUEUE, Ptask);
-				Ptask->TaskState = ready ;
-				break ;
+				Ptask->TaskState = ready;
+				break;
 			}
-			//	if the Ptask priority > nexttask then (lowest number is meaning higher priority)
-			if (Ptask->priority < PnextTask->priority )
+			else if (Ptask->priority < PnextTask->priority)
 			{
 				FIFO_enqueue(&READY_QUEUE, Ptask);
-				Ptask->TaskState = ready ;
-				break ;
+				Ptask->TaskState = ready;
+				break;
 			}
 			else if (Ptask->priority == PnextTask->priority)
 			{
-				//	if the Ptask priority == nexttask then
-				//		push Ptask to ready state
-				//	And make the ptask = nexttask  and nexttask++
 				FIFO_enqueue(&READY_QUEUE, Ptask);
-				Ptask->TaskState = ready ;
-			}else if (Ptask->priority > PnextTask->priority)
+				Ptask->TaskState = ready;
+			}
+			else /* priority > */
 			{
-				//not allowed to happen as we already reordered it by bubble sort
-				break ;
+				break;
 			}
 		}
-			iterator++ ;
-
-
+		iterator++;
 	}
 }
 
@@ -308,23 +311,23 @@ void Decide_whatNext(void)
 	__disable_irq();
 
 	//if Ready Queue is empty && OS_Control->currentTask != suspend
-		if (READY_QUEUE.counter == 0 && OS_Control.CurrentTask->TaskState != Suspend) //FIFO_EMPTY
+	if (READY_QUEUE.counter == 0 && OS_Control.CurrentTask->TaskState != Suspend) //FIFO_EMPTY
+	{
+		OS_Control.CurrentTask->TaskState = Running ;
+		//add the current task again(round robin)
+		FIFO_enqueue(&READY_QUEUE, OS_Control.CurrentTask);
+		OS_Control.NextTask = OS_Control.CurrentTask ;
+	}else
+	{
+		FIFO_dequeue(&READY_QUEUE, &OS_Control.NextTask);
+		OS_Control.NextTask->TaskState = Running ;
+		//update Ready queue (to keep round robin Algo. happen)
+		if ((OS_Control.CurrentTask->priority == OS_Control.NextTask->priority )&&(OS_Control.CurrentTask->TaskState != Suspend))
 		{
-			OS_Control.CurrentTask->TaskState = Running ;
-			//add the current task again(round robin)
 			FIFO_enqueue(&READY_QUEUE, OS_Control.CurrentTask);
-			OS_Control.NextTask = OS_Control.CurrentTask ;
-		}else
-		{
-			FIFO_dequeue(&READY_QUEUE, &OS_Control.NextTask);
-			OS_Control.NextTask->TaskState = Running ;
-			//update Ready queue (to keep round robin Algo. happen)
-			if ((OS_Control.CurrentTask->priority == OS_Control.NextTask->priority )&&(OS_Control.CurrentTask->TaskState != Suspend))
-			{
-				FIFO_enqueue(&READY_QUEUE, OS_Control.CurrentTask);
-				OS_Control.CurrentTask->TaskState = ready ;
-			}
+			OS_Control.CurrentTask->TaskState = ready ;
 		}
+	}
 
 	__enable_irq();
 }
@@ -367,6 +370,15 @@ void OS_SVC(uint32 * Stack_Frame)
 	case SVC_AquireMutex:/* task Aquire Mutex*/
 		break;
 	case SVC_ReleaseMutex:/* task Release Mutex*/
+		MYRTOS_Update_Sch_teble();
+		if (OS_Control.OSmodeID == OsRunning)
+		{
+			if (strcmp(OS_Control.CurrentTask->TaskName, "IdleTask") != 0)
+			{
+				Decide_whatNext();
+				trigger_OS_PendSV();
+			}
+		}
 		break;
 	}
 
@@ -467,14 +479,60 @@ void MYRTOS_Update_TasksWaitingTime()
 			if (OS_Control.OSTasks[i]->TimingWaiting.Blocking == Enable)
 			{
 				OS_Control.OSTasks[i]->TimingWaiting.Ticks_Count-- ;
-				if (OS_Control.OSTasks[i]->TimingWaiting.Ticks_Count == 1)
+				if (OS_Control.OSTasks[i]->TimingWaiting.Ticks_Count == 0)
 				{
 					OS_Control.OSTasks[i]->TimingWaiting.Blocking = Disable ;
-					OS_Control.OSTasks[i]->TaskState = Waiting ;
-					MYRTOS_OS_SVC_Set(SVC_TaskWaitingTime);
+					OS_Control.OSTasks[i]->TaskState = ready ;
+					//					MYRTOS_OS_SVC_Set(SVC_TaskWaitingTime);
 				}
 			}
 		}
 	}
+	MYRTOS_Update_Sch_teble();
 }
+
+MYRTOS_errorID GetResource(Resource_t* Res)
+{
+	if (Res == NULL_PTR || OS_Control.CurrentTask == NULL_PTR)
+		return Task_Null_Pointer;
+
+
+	/*check if the task is the owner of the resource */
+	if (Res->Owner == OS_Control.CurrentTask)
+	{
+		return Task_Invalid_State;
+	}
+
+
+	if (Res->Owner != NULL_PTR)
+	{
+		return Task_Invalid_State;
+	}
+
+	/*Ceiling Priority*/
+	Res->Owner = OS_Control.CurrentTask;
+	Res->PreviousPriority = OS_Control.CurrentTask->priority;
+
+	if (OS_Control.CurrentTask->priority > Res->CeilingPriority)
+	{
+		OS_Control.CurrentTask->priority = Res->CeilingPriority;
+	}
+
+	return NoError;
+}
+MYRTOS_errorID ReleaseResource(Resource_t* Res)
+{
+	if (Res == NULL_PTR || Res->Owner != OS_Control.CurrentTask)
+		return Task_Invalid_State;
+
+	/* recovre the orignal priority for the task */
+	OS_Control.CurrentTask->priority = Res->PreviousPriority;
+	Res->Owner = NULL_PTR;
+
+
+	MYRTOS_OS_SVC_Set(SVC_ReleaseMutex);
+
+	return NoError;
+}
+
 

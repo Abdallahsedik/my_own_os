@@ -8,10 +8,9 @@
 #ifndef INC_MYRTOS_FIFO_H_
 #define INC_MYRTOS_FIFO_H_
 
-
 #include "Scheduler.h"
 /*customer can select element type */
-#define element_type Task_ref*
+#define element_type  Task_ref*
 
 typedef struct{
 	unsigned int counter;

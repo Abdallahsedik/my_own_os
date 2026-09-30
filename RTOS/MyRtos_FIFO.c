@@ -9,6 +9,7 @@
 
 
 #include"MyRtos_FIFO.h"
+#include "Std_Types.h"
 /* *********************************** */
 Buffer_status FIFO_init (FIFO_Buf_t* fifo,element_type* buff , unsigned int length){
 
