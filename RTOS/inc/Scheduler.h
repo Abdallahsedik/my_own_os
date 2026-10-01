@@ -8,22 +8,14 @@
 #ifndef INC_SCHEDULER_H_
 #define INC_SCHEDULER_H_
 #include "Cortexmx_OsPorting.h"
+#include "Os_Types.h"
 
 #define MAX_TASKS   16 /*max number of tasks*/
 
-typedef enum{
-	NoError                          = 0,
-	Ready_Queue_init_error           = 1,
-	Task_exceeded_StackSize          = 2,
-	MutexisReacedToMaxNumberOfUsers  = 4,
-	Task_Null_Pointer                = 8,
-	Task_Invalid_State               = 16,
-	Task_Not_Current                 = 32,
-	Task_Limit_Exceeded				 =64
-}MYRTOS_errorID;
 
 
 typedef struct Task_ref{
+	TaskType  TaskID;
 	uint32 Stack_Size;
 	uint8 priority;
 	void (*p_TaskEntry)(void); //pointer to Tack C Function
@@ -32,13 +24,7 @@ typedef struct Task_ref{
 	uint32 _E_PSP_Task ;//Not Entered by the user
 	uint32* Current_PSP ;//Not Entered by the user
 	char TaskName[30] ;
-	enum{
-		Suspend,
-		Running,
-		Waiting,
-		ready
-	}TaskState	;//Not Entered by the user
-
+	TaskStateType TaskState;	//Not Entered by the user
 	struct{
 		enum{
 			Enable,
@@ -71,22 +57,28 @@ typedef struct{
 
 
 
+StatusType MYRTOS_Init();
+StatusType MYRTOS_Create_task(Task_ref * TRef);
+//StatusType Activate_task(Task_ref * TRef);
+StatusType ActivateTask(TaskType);
+StatusType TerminateTask(void);
+StatusType Start_OS(void);
+StatusType TaskWait(TaskType TaskID, uint32 NoTicks);
+StatusType Os_Delay(uint32 NoTicks);
 
-MYRTOS_errorID MYRTOS_Init();
-MYRTOS_errorID MYRTOS_Create_task(Task_ref * TRef);
-MYRTOS_errorID Activate_task(Task_ref * TRef);
-MYRTOS_errorID Terminate_task(void);
-MYRTOS_errorID Start_OS(void);
+
+
 void MYRTOS_Update_TasksWaitingTime(void);
-void MYRTOS_TaskWait(unsigned int NoTICKS,Task_ref* SelfTref);
-void Decide_whatNext(void);
-MYRTOS_errorID MyRTOS_GetTaskState(Task_ref* TRef, uint8* State);
-MYRTOS_errorID GetResource(Resource_t* Res);
-MYRTOS_errorID ReleaseResource(Resource_t* Res);
-MYRTOS_errorID Activate_task_FromISR(Task_ref* TRef);
+StatusType MyRTOS_GetTaskState(Task_ref* TRef, uint8* State);
+StatusType GetResource(Resource_t* Res);
+StatusType ReleaseResource(Resource_t* Res);
+void ShutdownOS(StatusType Error);
 
 void MyRTOS_StackOverflowHook(Task_ref* FaultyTask);
 
+
+
+void Decide_whatNext(void);
 
 
 #endif /* INC_SCHEDULER_H_ */

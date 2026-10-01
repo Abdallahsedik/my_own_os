@@ -8,7 +8,6 @@
 
 #include "Cortexmx_OsPorting.h"
 #include "Scheduler.h"
-extern struct OS_Control;
 
 uint8 Systick_LED=1;
 void HardFault_Handler(void){
@@ -50,6 +49,7 @@ __attribute__ ((naked)) void SVC_Handler(void)
 			"mrsne r0 ,psp \n\t"
 			"B OS_SVC");
 
+
 }
 void HW_Init()
 {
@@ -66,4 +66,11 @@ void Start_Ticker( )
 
 	Systick_Config(8000);
 }
+
+void Stop_Ticker(void)
+{
+    Systick_Stop();
+}
+
+
 

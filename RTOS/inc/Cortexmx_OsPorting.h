@@ -43,6 +43,8 @@ extern int  _end  ;/*_end == _eheap*/
 void trigger_OS_PendSV(void);
 void HW_Init();
 void Start_Ticker();
+void Stop_Ticker(void);
+
 
 
 #endif /* INC_CORTEXMX_OSPORTING_H_ */
