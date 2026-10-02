@@ -8,27 +8,19 @@
 
 #include "Scheduler.h"
 #include "MyRtos_FIFO.h"
-
+#include "OS.h"
 
 OS_Control_t OS_Control;
 
-typedef enum {
-	SVC_Activatetask,
-	SVC_terminateTask,
-	SVC_TaskWaitingTime,
-	SVC_AquireMutex,
-	SVC_ReleaseMutex
-}SVC_ID;
+
 
 FIFO_Buf_t READY_QUEUE ;
 Task_ref * READY_QUEUE_FIFO[MAX_TASKS];
 
-Task_ref IDLE_Task_Instance;
-Task_ref* IDLE_Task = &IDLE_Task_Instance;
 uint8 Idle_task_LED=0;
 
+volatile Task_ref* LastOverflowedTask = NULL_PTR;
 
-void MYRTOS_Update_Sch_teble(void);
 
 void MyRtos_IDLE_Task(void)
 {
@@ -40,20 +32,11 @@ void MyRtos_IDLE_Task(void)
 	}
 }
 
-/* internal helper: TaskType -> TCB */
-static Task_ref* Os_GetTask(TaskType TaskID)
+
+static void Os_TaskExit(void)
 {
-	uint8 i;
-	if (TaskID == INVALID_TASK)
-	{
-		return NULL_PTR;
-	}
-	for (i = 0; i < OS_Control.NoOfActiveTasks; i++)
-	{
-		if (OS_Control.OSTasks[i]->TaskID == TaskID)
-			return OS_Control.OSTasks[i];   /* pointer moves, ID travels with it */
-	}
-	return NULL_PTR;
+	TerminateTask();
+	while (1);
 }
 
 StatusType MYRTOS_Create_MainStack()
@@ -132,7 +115,7 @@ StatusType MyRTOS_Create_TaskStack(Task_ref* Tref)
 			}
 			else
 			{
-				*(Tref->Current_PSP)  = 0xFFFFFFFD ;
+				*(Tref->Current_PSP) = (unsigned int)Os_TaskExit;   /* 0xFFFFFFFD */
 
 			}
 
@@ -161,6 +144,7 @@ StatusType MyRTOS_Create_TaskStack(Task_ref* Tref)
 	return E_OK;
 }
 
+
 StatusType MYRTOS_Create_task(Task_ref * TRef)
 {
 
@@ -178,7 +162,7 @@ StatusType MYRTOS_Create_task(Task_ref * TRef)
 
 	}
 	StatusType Error_Status=E_OK;
-
+	TRef->TimingWaiting.Blocking = Disable;
 	/*create psp stack for the task
 	 *chack stack size not exceeded the psp stack */
 	TRef->TaskID =(TaskType)OS_Control.NoOfActiveTasks;
@@ -219,45 +203,12 @@ void MyRTOS_StackOverflowHook(Task_ref* FaultyTask)
 	__disable_irq();
 
 	/*save the fucdtion in variable */
-	static Task_ref* LastOverflowedTask;
 	LastOverflowedTask = FaultyTask;
 
 	while(1);/*stuck in this point */
 }
 
 
-StatusType MYRTOS_Init(void)
-{
-	StatusType Error_Status=E_OK;
-	//update os mode
-	OS_Control.OSmodeID=OSsuspend;
-
-	//specify the main stack for os
-	Error_Status=MYRTOS_Create_MainStack();
-	//create os ready queue
-	if(FIFO_init(&READY_QUEUE, READY_QUEUE_FIFO, MAX_TASKS)!= FIFO_NO_ERROR)
-	{
-		/*fatal karnel inveriant broken -> shutdown */
-		__disable_irq();
-		ShutdownOS(E_OS_ILLEGAL);
-		//		Error_Status+=E_OS_ILLEGAL;
-		while(1);
-	}
-	//cofig idle task
-
-	strcpy(IDLE_Task->TaskName, "IdleTask");
-	IDLE_Task->priority=255;
-	IDLE_Task->p_TaskEntry=MyRtos_IDLE_Task;
-	IDLE_Task->Stack_Size=300;
-
-	Error_Status = MYRTOS_Create_task(IDLE_Task);
-	if (Error_Status != E_OK)
-	{
-		return Error_Status;   /* stop here  */
-	}
-
-	return Error_Status;
-}
 
 void MYRTOS_OS_SVC_Set(SVC_ID svc_id)
 {
@@ -277,6 +228,9 @@ void MYRTOS_OS_SVC_Set(SVC_ID svc_id)
 	case SVC_ReleaseMutex:/* task Release Mutex*/
 		__asm("svc #0x04");
 		break;
+	case SVC_Schedule:/* task Release Mutex*/
+		__asm("svc #0x05");
+		break;
 
 
 
@@ -285,61 +239,39 @@ void MYRTOS_OS_SVC_Set(SVC_ID svc_id)
 }
 
 
-
-//StatusType Activate_task(Task_ref * TRef)
-StatusType ActivateTask(TaskType TaskID)
+StatusType MYRTOS_Init(void)
 {
+	StatusType Error_Status=E_OK;
+	//update os mode
+	OS_Control.OSmodeID=OSsuspend;
 
-	Task_ref * TRef =Os_GetTask(TaskID);
-	/*  NULL check */
-	if (TRef == NULL_PTR)
+	//specify the main stack for os
+	Error_Status=MYRTOS_Create_MainStack();
+	//create os ready queue
+	if(FIFO_init(&READY_QUEUE, READY_QUEUE_FIFO, MAX_TASKS)!= FIFO_NO_ERROR)
 	{
-		return E_OS_ID;
+		/*fatal karnel inveriant broken -> shutdown */
+		__disable_irq();
+		//		ShutdownOS(E_OS_ILLEGAL);
+		//		Error_Status+=E_OS_ILLEGAL;
+		while(1);
 	}
-	/* already activated (not Suspended */
-	else if (TRef->TaskState != SUSPENDED)
+	//cofig idle task
+
+	strcpy(IDLE_Task->TaskName, "IdleTask");
+	IDLE_Task->priority=255;
+	IDLE_Task->p_TaskEntry=MyRtos_IDLE_Task;
+	IDLE_Task->Stack_Size=300;
+
+	Error_Status = MYRTOS_Create_task(IDLE_Task);
+	if (Error_Status != E_OK)
 	{
-		return E_OS_LIMIT;
-	}
-	else
-	{
-		if(MyRTOS_Create_TaskStack(TRef) !=E_OK)
-		{
-			return E_OS_STACKFAULT;
-		}
-		else {
-
-		}
-
-
-	}
-	TRef->TaskState = READY;
-
-	if(__get_IPSR() !=0u)
-	{		/*handler mode*/
-		/*we are in Handler mode/privileged  */
-		MYRTOS_Update_Sch_teble();
-
-		if (OS_Control.OSmodeID == OsRunning)
-		{
-			Decide_whatNext();
-			trigger_OS_PendSV();   /*now we will trigger pendsv */
-		}
-
-
-	}
-	else
-	{		/*thread mode */
-		/*update sch. table
-		 * svc interrupt/ handler (update ready queue)
-		 * set pendsv (decide what next (dequeue) ,then switch context)
-		 * */
-		MYRTOS_OS_SVC_Set(SVC_Activatetask);
+		return Error_Status;   /* stop here  */
 	}
 
-
-	return E_OK;
+	return Error_Status;
 }
+//StatusType Activate_task(Task_ref * TRef)
 
 //StatusType Terminate_task(void)
 //{
@@ -350,30 +282,7 @@ StatusType ActivateTask(TaskType TaskID)
 //	MYRTOS_OS_SVC_Set(SVC_terminateTask);
 //	return E_OK;
 //}
-StatusType TerminateTask(void)
-{
-	Task_ref* T = OS_Control.CurrentTask;
 
-	if (__get_IPSR() != 0u)        /* task level only, not from an ISR */
-	{
-		return E_OS_CALLEVEL;
-	}
-	else if (T == NULL_PTR)
-	{		return E_OS_STATE;
-	}
-	//	if (T->HeldRes != NULL_PTR)    /*  may not terminate holding a resource */
-	//		return E_OS_RESOURCE;
-
-	T->TaskState = SUSPENDED;
-	MYRTOS_OS_SVC_Set(SVC_terminateTask);
-
-	/* ===== OSEK: this point is unreachable on success =====
-	 * (next activation gets a fresh stack frame). If we get here,
-	 * no context switch happened = kernel bug. Fail loudly: */
-	//    ErrorHook(E_OS_ILLEGAL);
-	__disable_irq();
-	while (1);
-}
 //void MYRTOS_TaskWait(unsigned int NoTICKS,Task_ref* SelfTref)
 //{
 //	SelfTref->TimingWaiting.Blocking = Enable ;
@@ -385,87 +294,16 @@ StatusType TerminateTask(void)
 //
 //}
 
-StatusType TaskWait(TaskType TaskID, uint32 NoTicks)
-{
-	Task_ref* T = Os_GetTask(TaskID);
-
-	/* unknown task ID (replaces the old NULL check) */
-	if (T == NULL_PTR)
-	{
-		return E_OS_ID;
-	}else if (__get_IPSR() != 0u)
-	{
-		/* an ISR can never block — there is no task context to suspend */
-		return E_OS_CALLEVEL;
-	}
-	else if (OS_Control.OSmodeID != OsRunning)
-	{
-		/* services are only valid between StartOS and ShutdownOS */
-		return E_OS_CALLEVEL;
-	}
-	else if (NoTicks == 0u)
-	{
-		/* parameter out of range */
-		return E_OS_VALUE;
-	}
-	else if(T==IDLE_Task)
-	{
-		/* the idle task must NEVER wait — it's the fallback */
-		return E_OS_STATE;
-	}
-
-
-	if (T == OS_Control.CurrentTask)
-	{
-		/*========== branch 1: block MYSELF ==========*/
-		T->TimingWaiting.Blocking    = Enable;
-		T->TimingWaiting.Ticks_Count = NoTicks;
-		T->TaskState = WAITING;                 /* freeze — NO frame rebuild! */
-
-		MYRTOS_OS_SVC_Set(SVC_terminateTask);   /* switch away immediately */
-
-		return E_OK;
-	}
-
-	/*========== branch 2: block ANOTHER task ==========*/
-	if (T->TaskState != READY)
-	{
-		return E_OS_STATE;   /* must sit in the queue */
-	}
-	else
-	{
-		T->TimingWaiting.Blocking    = Enable;
-		// Task Should be blocked
-		T->TimingWaiting.Ticks_Count = NoTicks;
-		T->TaskState = WAITING;
-	}
-	/* rebuild ready queue via syscall (drops the task we just blocked).
-	 * No context switch needed — the RUNNING task keeps the CPU. */
-	MYRTOS_OS_SVC_Set(SVC_TaskWaitingTime);
-
-	return E_OK;
-}
-
-StatusType Os_Delay(uint32 NoTicks)
-{
-	if (OS_Control.CurrentTask == NULL_PTR)
-	{
-		return E_OS_STATE;
-	}
-	return TaskWait(OS_Control.CurrentTask->TaskID, NoTicks);
-}
-StatusType MyRTOS_GetTaskState(Task_ref* TRef, uint8* State)
-{
-	if (TRef == NULL_PTR || State == NULL_PTR)
-	{
-		return E_OS_ID;
-	}
-
-	*State = TRef->TaskState;
-	return E_OK;
-}
-
-
+//StatusType MyRTOS_GetTaskState(Task_ref* TRef, uint8* State)
+//{
+//	if (TRef == NULL_PTR || State == NULL_PTR)
+//	{
+//		return E_OS_ID;
+//	}
+//
+//	*State = TRef->TaskState;
+//	return E_OK;
+//}
 /*handler */
 void bubbleSort()
 {
@@ -489,81 +327,89 @@ void MYRTOS_Update_Sch_teble(void)
 {
 	Task_ref * temp =NULL_PTR;
 	Task_ref* Ptask =NULL_PTR ;
-	Task_ref* PnextTask =NULL_PTR;
+	uint8 TopPriority = 255;     /* idle task = 255*/
 	uint8 iterator=0;
-	/*1-buble sort sch_table ->OS_Control->OSTasks[100]
+	/*1-buble sort sch_table ->OS_Control->OSTasks[ ]
 	 * periority high then low
 	 * 2-free ready queue
 	 * 3-update ready queue
 	 * */
 	bubbleSort();
-	while(FIFO_dequeue(&READY_QUEUE ,&temp)!=FIFO_EMPTY);
+	while(FIFO_dequeue(&READY_QUEUE ,&temp)!=FIFO_EMPTY); /* empty the queue */
 
-
-	while(iterator < OS_Control.NoOfActiveTasks)
+	/* 1- find the best task priority  from  (READY or RUNNING) */
+	for (iterator = 0; iterator < OS_Control.NoOfActiveTasks; iterator++)
 	{
 		Ptask = OS_Control.OSTasks[iterator];
-
-		if (Ptask->TaskState != SUSPENDED)
+		if ((Ptask->TaskState == READY || Ptask->TaskState == RUNNING) &&
+				(Ptask->priority < TopPriority))
 		{
-			if (iterator == OS_Control.NoOfActiveTasks - 1)
-			{
-				FIFO_enqueue(&READY_QUEUE, Ptask);
-				Ptask->TaskState = READY;
-				break;
-			}
-
-			PnextTask = OS_Control.OSTasks[iterator + 1];
-
-			if (PnextTask->TaskState == SUSPENDED)
-			{
-				FIFO_enqueue(&READY_QUEUE, Ptask);
-				Ptask->TaskState = READY;
-				break;
-			}
-			else if (Ptask->priority < PnextTask->priority)
-			{
-				FIFO_enqueue(&READY_QUEUE, Ptask);
-				Ptask->TaskState = READY;
-				break;
-			}
-			else if (Ptask->priority == PnextTask->priority)
-			{
-				FIFO_enqueue(&READY_QUEUE, Ptask);
-				Ptask->TaskState = READY;
-			}
-			else /* priority > */
-			{
-				break;
-			}
+			TopPriority = Ptask->priority;
 		}
-		iterator++;
 	}
+
+	/* 2- enqueue only READY tasks with that priority.
+	 */
+	for (iterator = 0; iterator < OS_Control.NoOfActiveTasks; iterator++)
+	{
+		Ptask = OS_Control.OSTasks[iterator];
+		if (Ptask->TaskState == READY && Ptask->priority == TopPriority)
+		{
+			FIFO_enqueue(&READY_QUEUE, Ptask);
+		}
+	}
+
+
 }
+
 
 
 void Decide_whatNext(void)
 {
+	Task_ref* Cur = OS_Control.CurrentTask;
+	uint8 SwitchNeeded = 0;
+	Task_ref* Pick = NULL_PTR;
+
+
 	__disable_irq();
 
-	//if Ready Queue is empty && OS_Control->currentTask != SUSPENDED
-	if (READY_QUEUE.counter == 0 && OS_Control.CurrentTask->TaskState != SUSPENDED) //FIFO_EMPTY
+	/* a decision is already waiting for PendSV*/
+	if (OS_Control.NextTask != NULL_PTR)
 	{
-		OS_Control.CurrentTask->TaskState = RUNNING ;
-		//add the current task again(round robin)
-		FIFO_enqueue(&READY_QUEUE, OS_Control.CurrentTask);
-		OS_Control.NextTask = OS_Control.CurrentTask ;
-	}else
-	{
-		FIFO_dequeue(&READY_QUEUE, &OS_Control.NextTask);
-		OS_Control.NextTask->TaskState = RUNNING ;
-		//update Ready queue (to keep round robin Algo. happen)
-		if ((OS_Control.CurrentTask->priority == OS_Control.NextTask->priority )&&(OS_Control.CurrentTask->TaskState != SUSPENDED))
-		{
-			FIFO_enqueue(&READY_QUEUE, OS_Control.CurrentTask);
-			OS_Control.CurrentTask->TaskState = READY ;
-		}
+		__enable_irq();
+		return;
 	}
+
+	/* 1) Non-preemptive RUNNING task keeps the CPU unless it blocked/terminated */
+	if (Cur->SchedType == NON_PREEMPTIVE && Cur->TaskState == RUNNING)
+	{
+		__enable_irq();
+		return;
+	}
+
+	/* 2) Current task is  (SUSPENDED/WAITING) or a higher-priority
+	 *    task is waiting in the ready queue -> must switch.               */
+
+	if (Cur->TaskState != RUNNING)
+	{
+		SwitchNeeded = 1;
+	}
+	else if ((READY_QUEUE.counter != 0) && ((*READY_QUEUE.head)->priority < Cur->priority))
+	{
+		SwitchNeeded = 1;
+	}
+
+	if (SwitchNeeded && FIFO_dequeue(&READY_QUEUE, &Pick) == FIFO_NO_ERROR)
+	{
+		Pick->TaskState = RUNNING;
+		if (Cur->TaskState == RUNNING)
+		{
+			Cur->TaskState = READY;
+		}
+		OS_Control.NextTask = Pick;
+
+	}
+
 
 	__enable_irq();
 }
@@ -577,29 +423,37 @@ void OS_SVC(uint32 * Stack_Frame)
 	SVC_Number= *((uint8 *)(((uint8 *)Stack_Frame[6])-2));
 	switch(SVC_Number)
 	{
-	case SVC_Activatetask:/*activate task*/
-	case SVC_terminateTask:/*terminate task*/
+	case SVC_Activatetask:
+	case SVC_terminateTask:
+	{
+		Task_ref* Cur = OS_Control.CurrentTask;
 
-		/*update sch table, READY queue
-		 * os is in running state
-		 * decide what next
-		 * trigger os_pendsv(switch context/restore )
-		 *  */
-		MYRTOS_Update_Sch_teble();
-		if(OS_Control.OSmodeID == OsRunning)
+		if (SVC_Number == SVC_terminateTask && Cur->TaskState == SUSPENDED)
 		{
-			/*idle task or not */
-			if (strcmp(OS_Control.CurrentTask->TaskName,"IdleTask") != 0)
+			if (Cur->ActivationCount > 0)
 			{
-				//Decide what Next
-				Decide_whatNext();
+				Cur->ActivationCount--;
+			}
 
-				//trigger OS_pendSV (Switch Context/Restore)
-				trigger_OS_PendSV();
+			if (Cur->ActivationCount > 0)       /* an activation is still pending */
+			{
+				MyRTOS_Create_TaskStack(Cur);   /* new  frame*/
+				Cur->TaskState = READY;
+				Cur->Restarted = 1;
 			}
 		}
 
+		MYRTOS_Update_Sch_teble();
+		if (OS_Control.OSmodeID == OsRunning)
+		{
+			if (strcmp(OS_Control.CurrentTask->TaskName, "IdleTask") != 0)
+			{
+				Decide_whatNext();
+				trigger_OS_PendSV();
+			}
+		}
 		break;
+	}
 	case SVC_TaskWaitingTime:/* task waiting time*/
 		MYRTOS_Update_Sch_teble();
 		break;
@@ -616,6 +470,20 @@ void OS_SVC(uint32 * Stack_Frame)
 			}
 		}
 		break;
+	case SVC_Schedule:
+		MYRTOS_Update_Sch_teble();
+		if (OS_Control.OSmodeID == OsRunning)
+		{	/*1- we must change SchedType from non_PREEMPTIVE to FULL_PREEMPTIVE
+		 *2-decide what next
+		 *3-restore SchedType to non_PREEMPTIVE */
+			Task_ref* Cur = OS_Control.CurrentTask;
+			SchedulingType_t Saved = Cur->SchedType;   /* copy the value */
+			Cur->SchedType = FULL_PREEMPTIVE;
+			Decide_whatNext();
+			Cur->SchedType = Saved;
+			trigger_OS_PendSV();
+		}
+		break;
 	}
 
 }
@@ -627,27 +495,34 @@ __attribute__  ((naked))void PendSV_Handler()
 	//====================================
 	//Save the Context of the Current Task
 	//====================================
-	//Get the Current Task "Current PSP from CPU register" as CPU Push XPSR,.....,R0
-	OS_GET_PSP(OS_Control.CurrentTask->Current_PSP);
+	if (OS_Control.CurrentTask->Restarted)
+	{
+		/* stack was just rebuilt in OS_SVC, clear  flag */
+		OS_Control.CurrentTask->Restarted = 0;
+	}
+	else
+	{
+		//Get the Current Task "Current PSP from CPU register" as CPU Push XPSR,.....,R0
+		OS_GET_PSP(OS_Control.CurrentTask->Current_PSP);
 
-	//using this Current_PSP (Pointer) tp store (R4 to R11)
-	OS_Control.CurrentTask->Current_PSP-- ;
-	__asm volatile("mov %0,r4 " : "=r" (*(OS_Control.CurrentTask->Current_PSP))  );
-	OS_Control.CurrentTask->Current_PSP-- ;
-	__asm volatile("mov %0,r5 " : "=r" (*(OS_Control.CurrentTask->Current_PSP))  );
-	OS_Control.CurrentTask->Current_PSP-- ;
-	__asm volatile("mov %0,r6 " : "=r" (*(OS_Control.CurrentTask->Current_PSP))  );
-	OS_Control.CurrentTask->Current_PSP-- ;
-	__asm volatile("mov %0,r7 " : "=r" (*(OS_Control.CurrentTask->Current_PSP))  );
-	OS_Control.CurrentTask->Current_PSP-- ;
-	__asm volatile("mov %0,r8 " : "=r" (*(OS_Control.CurrentTask->Current_PSP))  );
-	OS_Control.CurrentTask->Current_PSP-- ;
-	__asm volatile("mov %0,r9 " : "=r" (*(OS_Control.CurrentTask->Current_PSP))  );
-	OS_Control.CurrentTask->Current_PSP-- ;
-	__asm volatile("mov %0,r10 " : "=r" (*(OS_Control.CurrentTask->Current_PSP))  );
-	OS_Control.CurrentTask->Current_PSP-- ;
-	__asm volatile("mov %0,r11 " : "=r" (*(OS_Control.CurrentTask->Current_PSP))  );
-
+		//using this Current_PSP (Pointer) tp store (R4 to R11)
+		OS_Control.CurrentTask->Current_PSP-- ;
+		__asm volatile("mov %0,r4 " : "=r" (*(OS_Control.CurrentTask->Current_PSP))  );
+		OS_Control.CurrentTask->Current_PSP-- ;
+		__asm volatile("mov %0,r5 " : "=r" (*(OS_Control.CurrentTask->Current_PSP))  );
+		OS_Control.CurrentTask->Current_PSP-- ;
+		__asm volatile("mov %0,r6 " : "=r" (*(OS_Control.CurrentTask->Current_PSP))  );
+		OS_Control.CurrentTask->Current_PSP-- ;
+		__asm volatile("mov %0,r7 " : "=r" (*(OS_Control.CurrentTask->Current_PSP))  );
+		OS_Control.CurrentTask->Current_PSP-- ;
+		__asm volatile("mov %0,r8 " : "=r" (*(OS_Control.CurrentTask->Current_PSP))  );
+		OS_Control.CurrentTask->Current_PSP-- ;
+		__asm volatile("mov %0,r9 " : "=r" (*(OS_Control.CurrentTask->Current_PSP))  );
+		OS_Control.CurrentTask->Current_PSP-- ;
+		__asm volatile("mov %0,r10 " : "=r" (*(OS_Control.CurrentTask->Current_PSP))  );
+		OS_Control.CurrentTask->Current_PSP-- ;
+		__asm volatile("mov %0,r11 " : "=r" (*(OS_Control.CurrentTask->Current_PSP))  );
+	}
 	//save the current Value of PSP
 	//already saved in Current_PSP
 
@@ -684,100 +559,28 @@ __attribute__  ((naked))void PendSV_Handler()
 
 }
 
-StatusType Start_OS(void)
+
+
+void MYRTOS_Update_TasksWaitingTime(void)
 {
-
-	OS_Control.OSmodeID=OsRunning;
-	/*set default task (current task =idle task*/
-	OS_Control.CurrentTask = IDLE_Task;
-	OS_Control.CurrentTask->TaskState = RUNNING;
-	/*start ticker 1 ms*/
-	HW_Init();/*privilage*/
-	Start_Ticker();/*privilage*/
-
-	OS_SET_PSP(OS_Control.CurrentTask->Current_PSP);
-	/*switch thread mode sp from msp to psp  */
-	OS_SWITCH_SP_TO_PSP;
-
-	OS_SWITCH_TO_UNPRIVILEGED;
-
-	OS_Control.CurrentTask->p_TaskEntry();
-
-	return E_OK;
-}
-
-void MYRTOS_Update_TasksWaitingTime()
-{
-	for (int i =0; i < OS_Control.NoOfActiveTasks ; i++  )
-	{
-		if (OS_Control.OSTasks[i]->TaskState == SUSPENDED) //it is blocking until meet the time line
+	for (int i = 0; i < OS_Control.NoOfActiveTasks; i++) {
+		if (OS_Control.OSTasks[i]->TaskState == WAITING &&
+				OS_Control.OSTasks[i]->TimingWaiting.Blocking == Enable) //it is blocking until meet the time line
 		{
-			if (OS_Control.OSTasks[i]->TimingWaiting.Blocking == Enable)
-			{
-				OS_Control.OSTasks[i]->TimingWaiting.Ticks_Count-- ;
-				if (OS_Control.OSTasks[i]->TimingWaiting.Ticks_Count == 0)
-				{
-					OS_Control.OSTasks[i]->TimingWaiting.Blocking = Disable ;
-					OS_Control.OSTasks[i]->TaskState = READY ;
-					//					MYRTOS_OS_SVC_Set(SVC_TaskWaitingTime);
-				}
+			OS_Control.OSTasks[i]->TimingWaiting.Ticks_Count-- ;
+			if (OS_Control.OSTasks[i]->TimingWaiting.Ticks_Count == 0) {
+				OS_Control.OSTasks[i]->TimingWaiting.Blocking = Disable;
+				OS_Control.OSTasks[i]->TaskState = READY;
 			}
 		}
 	}
-	MYRTOS_Update_Sch_teble();
-}
 
-StatusType GetResource(Resource_t* Res)
-{
-	if (Res == NULL_PTR || OS_Control.CurrentTask == NULL_PTR)
-		return E_OS_ID;
+	MYRTOS_Update_Sch_teble();          // rebuild ready queue
 
-
-	/*check if the task is the owner of the resource */
-	if (Res->Owner == OS_Control.CurrentTask)
+	if (OS_Control.OSmodeID == OsRunning)
 	{
-		return E_OS_STATE;
+		Decide_whatNext();
+		if (OS_Control.NextTask != NULL_PTR)
+			trigger_OS_PendSV();
 	}
-
-
-	if (Res->Owner != NULL_PTR)
-	{
-		return E_OS_STATE;
-	}
-
-	/*Ceiling Priority*/
-	Res->Owner = OS_Control.CurrentTask;
-	Res->PreviousPriority = OS_Control.CurrentTask->priority;
-
-	if (OS_Control.CurrentTask->priority > Res->CeilingPriority)
-	{
-		OS_Control.CurrentTask->priority = Res->CeilingPriority;
-	}
-
-	return E_OK;
-}
-StatusType ReleaseResource(Resource_t* Res)
-{
-	if (Res == NULL_PTR || Res->Owner != OS_Control.CurrentTask)
-		return E_OS_STATE;
-
-	/* recovre the orignal priority for the task */
-	OS_Control.CurrentTask->priority = Res->PreviousPriority;
-	Res->Owner = NULL_PTR;
-
-
-	MYRTOS_OS_SVC_Set(SVC_ReleaseMutex);
-
-	return E_OK;
-}
-
-
-
-void ShutdownOS(StatusType Error)
-{
-	OS_Control.OSmodeID=OSsuspend;
-	Stop_Ticker();
-	__disable_irq();
-	while(1);
-
 }

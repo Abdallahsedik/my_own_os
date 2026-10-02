@@ -13,9 +13,32 @@
 #define MAX_TASKS   16 /*max number of tasks*/
 
 
+typedef enum {
+	SVC_Activatetask,
+	SVC_terminateTask,
+	SVC_TaskWaitingTime,
+	SVC_AquireMutex,
+	SVC_ReleaseMutex,
+	SVC_Schedule
+}SVC_ID;
+
+typedef enum
+{
+	TASK_BASIC,
+	TASK_EXTENDED
+} TaskClass_t;
+typedef enum {
+	FULL_PREEMPTIVE,
+	NON_PREEMPTIVE
+} SchedulingType_t;
 
 typedef struct Task_ref{
 	TaskType  TaskID;
+	TaskClass_t   TaskClass;
+	uint8         MaxActivations;   /* basic tasks only */
+	uint8         ActivationCount;  /* running + pending activations */
+	uint8 		Restarted;			/*for basic task to rebuild the task stack*/
+	SchedulingType_t SchedType; 	/*pre compile config */
 	uint32 Stack_Size;
 	uint8 priority;
 	void (*p_TaskEntry)(void); //pointer to Tack C Function
@@ -55,28 +78,33 @@ typedef struct{
 	uint8 PreviousPriority;   /*owner's original periority without celing */
 }Resource_t;
 
+/*  compile-time config for tasks  */
+typedef struct {
+	void (*TaskEntry)(void);
+	uint32 StackSize;
+	uint8 Priority;
+	const char* TaskName;
+	uint8 AutoStart;
+	TaskClass_t Class;
+	uint8 MaxActivations;
+	SchedulingType_t SchedType;
+} TaskConfig_t;
 
+extern const TaskConfig_t TaskConfigTable[];
+extern const uint8 NumberOfConfiguredTasks;
+
+extern Task_ref TasksPool[MAX_TASKS];
+#define IDLE_Task   (&TasksPool[0])
 
 StatusType MYRTOS_Init();
 StatusType MYRTOS_Create_task(Task_ref * TRef);
-//StatusType Activate_task(Task_ref * TRef);
-StatusType ActivateTask(TaskType);
-StatusType TerminateTask(void);
-StatusType Start_OS(void);
-StatusType TaskWait(TaskType TaskID, uint32 NoTicks);
-StatusType Os_Delay(uint32 NoTicks);
-
-
-
 void MYRTOS_Update_TasksWaitingTime(void);
-StatusType MyRTOS_GetTaskState(Task_ref* TRef, uint8* State);
-StatusType GetResource(Resource_t* Res);
-StatusType ReleaseResource(Resource_t* Res);
-void ShutdownOS(StatusType Error);
-
 void MyRTOS_StackOverflowHook(Task_ref* FaultyTask);
+StatusType MyRTOS_Create_TaskStack(Task_ref* Tref);
+void MYRTOS_Update_Sch_teble(void);
+StatusType MYRTOS_Create_MainStack();
 
-
+void MYRTOS_OS_SVC_Set(SVC_ID svc_id);
 
 void Decide_whatNext(void);
 

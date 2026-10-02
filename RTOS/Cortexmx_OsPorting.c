@@ -27,18 +27,13 @@ void UsageFault_Handler(void){
 void SysTick_Handler(void)
 {
 	Systick_LED^=1;
-
 	if ((uint32)OS_Control.CurrentTask->Current_PSP < OS_Control.CurrentTask->_E_PSP_Task)
 	{
 		MyRTOS_StackOverflowHook(OS_Control.CurrentTask);
 	}
-	MYRTOS_Update_TasksWaitingTime();
-	//decide what next
-	//triger os pendsv
-	Decide_whatNext();
-	/*switch context and restore */
-	trigger_OS_PendSV();
 
+	/* counts waiting tasks, rebuilds the queue, decides, triggers PendSV if needed */
+	MYRTOS_Update_TasksWaitingTime();
 
 }
 __attribute__ ((naked)) void SVC_Handler(void)
@@ -69,7 +64,7 @@ void Start_Ticker( )
 
 void Stop_Ticker(void)
 {
-    Systick_Stop();
+	Systick_Stop();
 }
 
 
